@@ -1,25 +1,25 @@
 import './style.css'
-import { copenhagenDayUtcRange, stdOnCopenhagenDate, stdToCopenhagenYmd } from './lib/dayBounds.ts'
+import { addDaysToCopenhagenYmd } from './lib/dayBounds.ts'
 import {
   type CharterKind,
   buildTwoSuggestions,
   clashSuffixesFromSchedule,
   inferVkgCallsignFromFlightNumber,
+  parseVkgDigitSuffix,
 } from './lib/allocate.ts'
 import {
-  buildCallsignLookupMap,
-  fetchFlightCallsignsInWindow,
-  fetchFlightsInWindow,
-  fetchLiveEtaCallsign,
-  lookupCallsignFromFlightkeysMap,
-  mapPool,
-  type OcdcFlightRow,
-} from './api/ocdc.ts'
+  findRiskyCallsignPairs,
+  suggestSafeThreeDigitVkgSuffixes,
+  type CallsignScheduleEntry,
+} from './lib/callsignSimilarity.ts'
+import { fetchResolvedCallsignsForCopenhagenDay } from './lib/scheduleCallsigns.ts'
+import type { OcdcFlightRow } from './api/ocdc.ts'
 
 const RAIDO_NOTE =
   'Hvis callsign er forskelligt fra Flynummer, så skal callsign indsættes i Leg under Flightplan Tab i Item 7 i Raido, efter flight er opdrettet i Raido.'
 
 const STATUS_LOADING = 'Henter data for valgte dag'
+const STATUS_TOMORROW = 'Henter morgendagens data…'
 
 function todayYmd(): string {
   return new Date().toISOString().slice(0, 10)
@@ -71,7 +71,13 @@ const dateInput = el('input', {
 const kindRow = el('div', { class: 'kind-row' })
 const statusEl = el('p', { class: 'status', text: '' })
 const resultEl = el('div', { class: 'result' })
+const tomorrowResultEl = el('div', { class: 'tomorrow-result' })
 const runBtn = el('button', { class: 'primary', type: 'button', text: 'Foreslå 2 muligheder' })
+const checkTomorrowBtn = el('button', {
+  type: 'button',
+  class: 'check-tomorrow',
+  text: 'Check Morgendagen for clashing callsigns',
+})
 
 function renderKindButtons(): void {
   kindRow.replaceChildren()
@@ -159,30 +165,15 @@ async function run(): Promise<void> {
   }
 
   runBtn.disabled = true
+  checkTomorrowBtn.disabled = true
   statusEl.textContent = STATUS_LOADING
   resultEl.replaceChildren()
+  tomorrowResultEl.replaceChildren()
 
   try {
-    const { dateFrom, dateTo } = copenhagenDayUtcRange(ymd)
-    const rows = await fetchFlightsInWindow(dateFrom, dateTo)
-    const dayFlights = rows.filter((f) => !f.canceled && stdOnCopenhagenDate(f.STD, ymd))
+    const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(ymd)
 
     const usedNumbers = new Set(dayFlights.map((f) => f.flightNumber.trim().toUpperCase()))
-
-    const fkRows = await fetchFlightCallsignsInWindow(dateFrom, dateTo)
-    const fkCallsignMap = buildCallsignLookupMap(fkRows)
-
-    const signs = await mapPool(dayFlights, 10, async (f: OcdcFlightRow) => {
-      const fromSearch = f.callsign?.trim()
-      if (fromSearch) return fromSearch
-      const fromFk = lookupCallsignFromFlightkeysMap(f, stdToCopenhagenYmd(f.STD), fkCallsignMap)
-      if (fromFk) return fromFk
-      try {
-        return await fetchLiveEtaCallsign(f.flightKey)
-      } catch {
-        return null
-      }
-    })
 
     const clashSuffixes = clashSuffixesFromSchedule(dayFlights, signs)
     const suggestions = buildTwoSuggestions(selected, usedNumbers, clashSuffixes)
@@ -219,20 +210,112 @@ async function run(): Promise<void> {
     resultEl.replaceChildren(el('p', { class: 'error', text: msg }))
   } finally {
     runBtn.disabled = false
+    checkTomorrowBtn.disabled = false
     if (statusEl.textContent === STATUS_LOADING) statusEl.textContent = ''
   }
 }
 
+async function checkTomorrowCallsignSimilarity(): Promise<void> {
+  const ymd = dateInput.value
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    statusEl.textContent = 'Vælg en gyldig dato.'
+    tomorrowResultEl.replaceChildren()
+    return
+  }
+
+  const tomorrowYmd = addDaysToCopenhagenYmd(ymd, 1)
+  checkTomorrowBtn.disabled = true
+  runBtn.disabled = true
+  statusEl.textContent = STATUS_TOMORROW
+  tomorrowResultEl.replaceChildren()
+
+  try {
+    const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(tomorrowYmd)
+    const entries: CallsignScheduleEntry[] = []
+    for (let i = 0; i < dayFlights.length; i++) {
+      const f = dayFlights[i]!
+      const raw = signs[i]?.trim() || ''
+      const cs = raw || inferVkgCallsignFromFlightNumber(f.flightNumber)
+      if (!cs) continue
+      const suf = parseVkgDigitSuffix(cs)
+      if (!suf) continue
+      entries.push({
+        flightNumber: f.flightNumber.trim().toUpperCase(),
+        callsign: cs.trim().toUpperCase(),
+        suffix: suf,
+      })
+    }
+
+    const pairs = findRiskyCallsignPairs(entries)
+    const allSuffixes = entries.map((e) => e.suffix)
+    const safeTriples = suggestSafeThreeDigitVkgSuffixes(allSuffixes, 12)
+
+    if (pairs.length === 0) {
+      tomorrowResultEl.append(
+        el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd}` }),
+        el('p', {
+          class: 'tomorrow-ok',
+          text: 'Ingen callsign-par fundet der er radiomæssigt for tæt på hinanden (efter samme regler som fx VKG441 / VKG4441 / VKG413).',
+        }),
+      )
+    } else {
+      const ul = el('ul', { class: 'tomorrow-pairs' })
+      for (const p of pairs) {
+        ul.append(
+          el('li', {}, [
+            el('strong', { text: p.flightNumberA }),
+            ' ',
+            el('span', { class: 'mono', text: p.callsignA }),
+            ' ↔ ',
+            el('strong', { text: p.flightNumberB }),
+            ' ',
+            el('span', { class: 'mono', text: p.callsignB }),
+            ` (suffix ${p.suffixA} / ${p.suffixB})`,
+          ]),
+        )
+      }
+      const chips = el('div', { class: 'suggest-chips' })
+      for (const t of safeTriples) {
+        chips.append(el('span', { class: 'chip', text: `VKG${t}` }))
+      }
+      tomorrowResultEl.append(
+        el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd} — ${pairs.length} mulige forvekslinger` }),
+        el('p', {
+          class: 'table-cap',
+          text: 'Par der kan forveksles i radio: samme tre sidste cifre som del af længere nummer, eller op til to cifferforskelle på samme længde.',
+        }),
+        ul,
+        el('h3', { class: 'subh-sm', text: 'Forslag: 3-cifrede VKG der ikke ligger for tæt på morgendagens suffixe' }),
+        chips,
+      )
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    tomorrowResultEl.append(el('p', { class: 'error', text: msg }))
+  } finally {
+    checkTomorrowBtn.disabled = false
+    runBtn.disabled = false
+    if (statusEl.textContent === STATUS_TOMORROW) statusEl.textContent = ''
+  }
+}
+
 runBtn.addEventListener('click', () => void run())
+checkTomorrowBtn.addEventListener('click', () => void checkTomorrowCallsignSimilarity())
+
+const dateRow = el('div', { class: 'date-row' }, [
+  el('label', { class: 'field date-field' }, ['Dato for flyvning', dateInput]),
+  checkTomorrowBtn,
+])
 
 root.append(
   el('header', { class: 'header' }, [el('h1', { text: 'Ekstra charter / POSI — flynummer og VKG' })]),
   el('section', { class: 'panel' }, [
-    el('label', { class: 'field' }, ['Dato for flyvning', dateInput]),
+    dateRow,
     el('div', { class: 'field' }, [el('span', { class: 'lbl', text: 'Type' }), kindRow]),
     runBtn,
     statusEl,
     resultEl,
+    tomorrowResultEl,
   ]),
 )
 

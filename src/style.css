@@ -51,11 +51,101 @@ body {
 }
 
 .date {
-  max-width: 12rem;
+  max-width: 100%;
+  width: 100%;
   padding: 0.45rem 0.55rem;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
   font: inherit;
+}
+
+.date-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.date-field {
+  flex: 1 1 12rem;
+  margin-bottom: 0;
+}
+
+button.check-tomorrow {
+  flex: 1 1 14rem;
+  align-self: flex-end;
+  margin-bottom: 0;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  border-radius: 8px;
+  border: 1px solid #94a3b8;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button.check-tomorrow:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+button.check-tomorrow:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tomorrow-result {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.subh-sm {
+  margin: 0.75rem 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: #0f172a;
+}
+
+.tomorrow-ok {
+  margin: 0;
+  color: #047857;
+  font-size: 0.9rem;
+}
+
+.tomorrow-pairs {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.88rem;
+}
+
+.tomorrow-pairs li {
+  margin: 0.35rem 0;
+}
+
+.suggest-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.suggest-chips .chip {
+  padding: 0.25rem 0.45rem;
+  border-radius: 6px;
+  background: #ecfeff;
+  border: 1px solid #99f6e4;
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+span.mono {
+  font-variant-numeric: tabular-nums;
+  color: #334155;
 }
 
 .lbl {

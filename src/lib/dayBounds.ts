@@ -22,3 +22,8 @@ export function stdOnCopenhagenDate(stdIso: string, ymd: string): boolean {
 export function stdToCopenhagenYmd(stdIso: string): string {
   return dayjs(stdIso).tz(TZ).format('YYYY-MM-DD')
 }
+
+/** Læg dage til en kalenderdato i København (YYYY-MM-DD). */
+export function addDaysToCopenhagenYmd(ymd: string, deltaDays: number): string {
+  return dayjs.tz(ymd, TZ).add(deltaDays, 'day').format('YYYY-MM-DD')
+}
