@@ -3,7 +3,6 @@ import { addDaysToCopenhagenYmd } from './lib/dayBounds.ts'
 import {
   type CharterKind,
   buildTwoSuggestions,
-  clashSuffixesFromSchedule,
   inferVkgCallsignFromFlightNumber,
   parseVkgDigitSuffix,
 } from './lib/allocate.ts'
@@ -109,6 +108,142 @@ function callsignMirrorsFlightNumber(flightNumber: string, callsign: string): bo
   return inferred.trim().toUpperCase() === callsign.trim().toUpperCase()
 }
 
+function resolveRegistration(f: OcdcFlightRow): string | null {
+  const row = f as OcdcFlightRow & {
+    registration?: string | null
+    aircraftRegistration?: string | null
+    aircraftReg?: string | null
+  }
+  const reg = row.registration ?? row.aircraftRegistration ?? row.aircraftReg ?? null
+  const v = reg?.trim()
+  return v ? v.toUpperCase() : null
+}
+
+function toEpochMs(v: string | null | undefined): number | null {
+  if (!v) return null
+  const t = Date.parse(v)
+  return Number.isFinite(t) ? t : null
+}
+
+function resolveFlightWindow(f: OcdcFlightRow): { startMs: number; endMs: number } | null {
+  const row = f as OcdcFlightRow & {
+    ETD?: string | null
+    ATD?: string | null
+    departureTime?: string | null
+    departureTimeUtc?: string | null
+    STA?: string | null
+    ETA?: string | null
+    ATA?: string | null
+    arrivalTime?: string | null
+    arrivalTimeUtc?: string | null
+  }
+  const startMs =
+    toEpochMs(row.ATD) ??
+    toEpochMs(row.ETD) ??
+    toEpochMs(row.departureTimeUtc) ??
+    toEpochMs(row.departureTime) ??
+    toEpochMs(f.STD)
+  const endMs =
+    toEpochMs(row.ATA) ??
+    toEpochMs(row.ETA) ??
+    toEpochMs(row.STA) ??
+    toEpochMs(row.arrivalTimeUtc) ??
+    toEpochMs(row.arrivalTime)
+  if (startMs === null || endMs === null) return null
+  if (endMs < startMs) return { startMs: endMs, endMs: startMs }
+  return { startMs, endMs }
+}
+
+function parseCarrierAndNumericFlightNumber(flightNumber: string): { carrier: string; num: number } | null {
+  const m = /^([A-Z]{2})(\d{3,5})$/i.exec(flightNumber.trim())
+  if (!m) return null
+  const num = parseInt(m[2], 10)
+  if (!Number.isFinite(num)) return null
+  return { carrier: m[1].toUpperCase(), num }
+}
+
+function areConsecutiveFlightNumbers(a: string, b: string): boolean {
+  const pa = parseCarrierAndNumericFlightNumber(a)
+  const pb = parseCarrierAndNumericFlightNumber(b)
+  if (!pa || !pb) return false
+  if (pa.carrier !== pb.carrier) return false
+  return Math.abs(pa.num - pb.num) === 1
+}
+
+function normalizeRegistration(reg: string | null | undefined): string | null {
+  if (!reg) return null
+  const cleaned = reg.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+  return cleaned || null
+}
+
+function windowsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart <= bEnd && bStart <= aEnd
+}
+
+function canBeSimultaneous(a: CallsignScheduleEntry, b: CallsignScheduleEntry): boolean {
+  if (areConsecutiveFlightNumbers(a.flightNumber, b.flightNumber)) return false
+  const regA = normalizeRegistration(a.registration)
+  const regB = normalizeRegistration(b.registration)
+  if (regA && regB && regA === regB) return false
+  if (
+    Number.isFinite(a.windowStartMs) &&
+    Number.isFinite(a.windowEndMs) &&
+    Number.isFinite(b.windowStartMs) &&
+    Number.isFinite(b.windowEndMs)
+  ) {
+    return windowsOverlap(
+      a.windowStartMs as number,
+      a.windowEndMs as number,
+      b.windowStartMs as number,
+      b.windowEndMs as number,
+    )
+  }
+  return true
+}
+
+function buildCallsignEntries(dayFlights: OcdcFlightRow[], signs: (string | null)[]): CallsignScheduleEntry[] {
+  const entries: CallsignScheduleEntry[] = []
+  for (let i = 0; i < dayFlights.length; i++) {
+    const f = dayFlights[i]!
+    const raw = signs[i]?.trim() || ''
+    const cs = raw || inferVkgCallsignFromFlightNumber(f.flightNumber)
+    if (!cs) continue
+    const suf = parseVkgDigitSuffix(cs)
+    if (!suf) continue
+    const window = resolveFlightWindow(f)
+    entries.push({
+      flightNumber: f.flightNumber.trim().toUpperCase(),
+      callsign: cs.trim().toUpperCase(),
+      suffix: suf,
+      registration: resolveRegistration(f),
+      windowStartMs: window?.startMs ?? null,
+      windowEndMs: window?.endMs ?? null,
+    })
+  }
+  return entries
+}
+
+function relevantConcurrentSuffixes(entries: CallsignScheduleEntry[]): string[] {
+  if (entries.length <= 1) return entries.map((e) => e.suffix)
+  const kept = new Set<string>()
+  for (let i = 0; i < entries.length; i++) {
+    const a = entries[i]!
+    if (!Number.isFinite(a.windowStartMs) || !Number.isFinite(a.windowEndMs)) {
+      kept.add(a.suffix)
+      continue
+    }
+    for (let j = 0; j < entries.length; j++) {
+      if (i === j) continue
+      const b = entries[j]!
+      if (canBeSimultaneous(a, b)) {
+        kept.add(a.suffix)
+        break
+      }
+    }
+  }
+  return [...kept]
+}
+
 function buildDataTable(
   dayFlights: OcdcFlightRow[],
   rawCallsigns: (string | null)[],
@@ -172,10 +307,11 @@ async function run(): Promise<void> {
 
   try {
     const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(ymd)
+    const entries = buildCallsignEntries(dayFlights, signs)
 
     const usedNumbers = new Set(dayFlights.map((f) => f.flightNumber.trim().toUpperCase()))
 
-    const clashSuffixes = clashSuffixesFromSchedule(dayFlights, signs)
+    const clashSuffixes = relevantConcurrentSuffixes(entries)
     const suggestions = buildTwoSuggestions(selected, usedNumbers, clashSuffixes)
 
     const dataBlock = buildDataTable(dayFlights, signs)
@@ -231,23 +367,10 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
 
   try {
     const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(tomorrowYmd)
-    const entries: CallsignScheduleEntry[] = []
-    for (let i = 0; i < dayFlights.length; i++) {
-      const f = dayFlights[i]!
-      const raw = signs[i]?.trim() || ''
-      const cs = raw || inferVkgCallsignFromFlightNumber(f.flightNumber)
-      if (!cs) continue
-      const suf = parseVkgDigitSuffix(cs)
-      if (!suf) continue
-      entries.push({
-        flightNumber: f.flightNumber.trim().toUpperCase(),
-        callsign: cs.trim().toUpperCase(),
-        suffix: suf,
-      })
-    }
+    const entries = buildCallsignEntries(dayFlights, signs)
 
     const pairs = findRiskyCallsignPairs(entries)
-    const allSuffixes = entries.map((e) => e.suffix)
+    const allSuffixes = relevantConcurrentSuffixes(entries)
     const safeTriples = suggestSafeThreeDigitVkgSuffixes(allSuffixes, 12)
 
     if (pairs.length === 0) {
@@ -255,7 +378,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd}` }),
         el('p', {
           class: 'tomorrow-ok',
-          text: 'Ingen callsign-par fundet der er radiomæssigt for tæt på hinanden (efter samme regler som fx VKG441 / VKG4441 / VKG413).',
+          text: 'Ingen callsign-par fundet der er radiomæssigt for tæt på hinanden (samme suffix, suffix som ender på andet suffix, eller kun ét ciffer forskelligt).',
         }),
       )
     } else {
@@ -282,7 +405,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd} — ${pairs.length} mulige forvekslinger` }),
         el('p', {
           class: 'table-cap',
-          text: 'Par der kan forveksles i radio: samme tre sidste cifre som del af længere nummer, eller op til to cifferforskelle på samme længde.',
+          text: 'Par der kan forveksles i radio: samme suffix, suffix som del af længere nummer (fx 441 i 4441), eller kun ét ciffer forskelligt på samme længde. Fortløbende flynumre, samme registrering og ikke-overlappende tidsvinduer filtreres fra.',
         }),
         ul,
         el('h3', { class: 'subh-sm', text: 'Forslag: 3-cifrede VKG der ikke ligger for tæt på morgendagens suffixe' }),
