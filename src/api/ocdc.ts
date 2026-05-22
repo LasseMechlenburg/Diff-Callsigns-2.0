@@ -1,6 +1,22 @@
 /** I dev bruges Vite-proxy til `/api`. I build kan du sætte `VITE_API_ROOT=http://host:3002/api/v1` hvis CORS tillader det. */
 const API_BASE = (import.meta.env.VITE_API_ROOT as string | undefined)?.replace(/\/$/, '') || '/api/v1'
 
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const rawBearer = (import.meta.env.VITE_API_BEARER_TOKEN as string | undefined)?.trim()
+  const apiKey = (import.meta.env.VITE_API_KEY as string | undefined)?.trim()
+  if (rawBearer) {
+    headers.Authorization = /^Bearer\s+/i.test(rawBearer) ? rawBearer : `Bearer ${rawBearer}`
+  }
+  if (apiKey) headers['X-API-Key'] = apiKey
+  return headers
+}
+
+function authFetchInit(): RequestInit | undefined {
+  const headers = authHeaders()
+  return Object.keys(headers).length > 0 ? { headers } : undefined
+}
+
 export type OcdcFlightRow = {
   flightKey: string
   flightNumber: string
@@ -65,7 +81,7 @@ export async function fetchFlightsInWindow(
       take: String(pageSize),
       skip: String(skip),
     })
-    const res = await fetch(`${API_BASE}/flights/search?${q}`)
+    const res = await fetch(`${API_BASE}/flights/search?${q}`, authFetchInit())
     const body = await readJson<FlightsSearchPayload>(res)
     if (!body.success) throw new Error('flights/search success=false')
     const chunk = body.data.flights
@@ -93,7 +109,7 @@ export async function fetchFlightCallsignsInWindow(
       take: String(pageSize),
       skip: String(skip),
     })
-    const res = await fetch(`${API_BASE}/flights/callsigns?${q}`)
+    const res = await fetch(`${API_BASE}/flights/callsigns?${q}`, authFetchInit())
     const body = await readJson<FlightCallsignsPayload>(res)
     if (!body.success) throw new Error('flights/callsigns success=false')
     const chunk = body.data.rows
@@ -142,7 +158,7 @@ export function lookupCallsignFromFlightkeysMap(
 
 export async function fetchLiveEtaCallsign(flightKey: string): Promise<string | null> {
   const enc = encodeURIComponent(flightKey)
-  const res = await fetch(`${API_BASE}/flights/${enc}/flightkeys/live-eta`)
+  const res = await fetch(`${API_BASE}/flights/${enc}/flightkeys/live-eta`, authFetchInit())
   if (res.status === 404) return null
   const body = await readJson<LiveEtaPayload>(res)
   if (!body.success) return null

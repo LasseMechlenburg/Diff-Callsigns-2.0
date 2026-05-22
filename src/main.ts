@@ -206,7 +206,7 @@ function buildCallsignEntries(dayFlights: OcdcFlightRow[], signs: (string | null
   for (let i = 0; i < dayFlights.length; i++) {
     const f = dayFlights[i]!
     const raw = signs[i]?.trim() || ''
-    const cs = raw || inferVkgCallsignFromFlightNumber(f.flightNumber)
+    const cs = raw
     if (!cs) continue
     const suf = parseVkgDigitSuffix(cs)
     if (!suf) continue
@@ -252,10 +252,8 @@ function buildDataTable(
     .map((f, i) => {
       const fn = f.flightNumber.trim().toUpperCase()
       const liveRaw = rawCallsigns[i]?.trim() || ''
-      const inferred = inferVkgCallsignFromFlightNumber(f.flightNumber)
       let display: string
       if (liveRaw) display = liveRaw
-      else if (inferred) display = `${inferred} (antaget)`
       else display = '—'
       return { fn, display }
     })
@@ -285,7 +283,7 @@ function buildDataTable(
   const sum = el('summary', { text: `Grunddata: ${rows.length} fly med STD på valgte dag (sorteret på flynummer)` })
   const cap = el('p', {
     class: 'table-cap',
-    text: 'Callsign: flyoversigt (søgning) → FlightKeys-liste (`/flights/callsigns`) → live-ETA. «Antaget» kun hvis ingen af delene; VKG + samme cifre som efter DK (fx DK628→VKG628). Clash bruger hele cifferstrengen efter VKG.',
+    text: 'Callsign: flyoversigt (søgning) → FlightKeys-liste (`/flights/callsigns`) → live-ETA → PDF-fallback. Hvis ingen kilde har callsign, vises den som tom (—).',
   })
   det.append(sum, cap, table)
   return det

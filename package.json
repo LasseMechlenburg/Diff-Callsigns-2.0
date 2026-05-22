@@ -13,6 +13,7 @@
     "vite": "^8.0.4"
   },
   "dependencies": {
-    "dayjs": "^1.11.20"
+    "dayjs": "^1.11.20",
+    "pdfjs-dist": "^5.7.284"
   }
 }
