@@ -19,6 +19,7 @@ const RAIDO_NOTE =
 
 const STATUS_LOADING = 'Henter data for valgte dag'
 const STATUS_TOMORROW = 'Henter morgendagens data…'
+const EXCLUDED_SUGGESTION_STATIONS = new Set(['GZP', 'ADB', 'AYT', 'HRG', 'SID', 'KBV', 'HKT'])
 
 function todayYmd(): string {
   return new Date().toISOString().slice(0, 10)
@@ -117,6 +118,29 @@ function resolveRegistration(f: OcdcFlightRow): string | null {
   const reg = row.registration ?? row.aircraftRegistration ?? row.aircraftReg ?? null
   const v = reg?.trim()
   return v ? v.toUpperCase() : null
+}
+
+function resolveIataAirports(f: OcdcFlightRow): { dep: string | null; arr: string | null } {
+  const row = f as OcdcFlightRow & {
+    departureIATA?: string | null
+    arrivalIATA?: string | null
+  }
+  const dep = row.departureIATA?.trim().toUpperCase() || null
+  const arr = row.arrivalIATA?.trim().toUpperCase() || null
+  return { dep, arr }
+}
+
+function isExcludedFromSuggestionsByStation(f: OcdcFlightRow): boolean {
+  const { dep, arr } = resolveIataAirports(f)
+  return (dep ? EXCLUDED_SUGGESTION_STATIONS.has(dep) : false) || (arr ? EXCLUDED_SUGGESTION_STATIONS.has(arr) : false)
+}
+
+function buildStationExclusionNote(excludedCount: number): HTMLParagraphElement | null {
+  if (excludedCount <= 0) return null
+  return el('p', {
+    class: 'table-cap',
+    text: `Note: ${excludedCount} fly til/fra GZP, ADB, AYT, HRG, SID, KBV eller HKT er udeladt i forslagene pga permits.`,
+  })
 }
 
 function toEpochMs(v: string | null | undefined): number | null {
@@ -331,21 +355,39 @@ async function run(): Promise<void> {
 
   try {
     const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(ymd)
-    const entries = buildCallsignEntries(dayFlights, signs)
+    const filteredFlights: OcdcFlightRow[] = []
+    const filteredSigns: ResolvedCallsign[] = []
+    let excludedForSuggestions = 0
+    for (let i = 0; i < dayFlights.length; i++) {
+      const f = dayFlights[i]!
+      if (isExcludedFromSuggestionsByStation(f)) {
+        excludedForSuggestions++
+        continue
+      }
+      filteredFlights.push(f)
+      filteredSigns.push(signs[i]!)
+    }
 
-    const usedNumbers = new Set(dayFlights.map((f) => f.flightNumber.trim().toUpperCase()))
+    const entries = buildCallsignEntries(filteredFlights, filteredSigns)
+
+    const usedNumbers = new Set(filteredFlights.map((f) => f.flightNumber.trim().toUpperCase()))
 
     const clashSuffixes = relevantConcurrentSuffixes(entries)
     const suggestions = buildTwoSuggestions(selected, usedNumbers, clashSuffixes)
 
     const dataBlock = buildDataTable(dayFlights, signs, { labelText: 'valgte dag', open: true })
+    const exclusionNote = buildStationExclusionNote(excludedForSuggestions)
 
     if (suggestions.length === 0) {
       const err =
         selected === 'posi'
           ? 'Ingen to komplette forslag (POSI-interval eller callsign-clash).'
           : 'Intet ledigt ud/retur-par i charter-interval med to gyldige callsigns (eller clash med eksisterende data).'
-      resultEl.replaceChildren(dataBlock, el('p', { class: 'error', text: err }))
+      resultEl.replaceChildren(
+        dataBlock,
+        ...(exclusionNote ? [exclusionNote] : []),
+        el('p', { class: 'error', text: err }),
+      )
     } else {
       const ol = el('ol', { class: 'suggestions' })
       for (const s of suggestions) {
@@ -360,6 +402,7 @@ async function run(): Promise<void> {
 
       resultEl.replaceChildren(
         dataBlock,
+        ...(exclusionNote ? [exclusionNote] : []),
         el('h2', { class: 'subh', text: 'Forslag (op til to)' }),
         ol,
         ...(needsRaidoNote ? [raidoNoteEl()] : []),
@@ -391,20 +434,34 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
 
   try {
     const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(tomorrowYmd)
-    const entries = buildCallsignEntries(dayFlights, signs)
+    const suggestionFlights: OcdcFlightRow[] = []
+    const suggestionSigns: ResolvedCallsign[] = []
+    let excludedForSuggestions = 0
+    for (let i = 0; i < dayFlights.length; i++) {
+      const f = dayFlights[i]!
+      if (isExcludedFromSuggestionsByStation(f)) {
+        excludedForSuggestions++
+        continue
+      }
+      suggestionFlights.push(f)
+      suggestionSigns.push(signs[i]!)
+    }
+    const suggestionEntries = buildCallsignEntries(suggestionFlights, suggestionSigns)
     const tomorrowDataBlock = buildDataTable(dayFlights, signs, {
       labelText: `morgendag ${tomorrowYmd}`,
       open: false,
     })
+    const exclusionNote = buildStationExclusionNote(excludedForSuggestions)
 
-    const pairs = findRiskyCallsignPairs(entries)
-    const allSuffixes = relevantConcurrentSuffixes(entries)
+    const pairs = findRiskyCallsignPairs(suggestionEntries)
+    const allSuffixes = relevantConcurrentSuffixes(suggestionEntries)
     const safeTriples = suggestSafeThreeDigitVkgSuffixes(allSuffixes, 12)
 
     if (pairs.length === 0) {
       tomorrowResultEl.append(
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd}` }),
         tomorrowDataBlock,
+        ...(exclusionNote ? [exclusionNote] : []),
         el('p', {
           class: 'tomorrow-ok',
           text: 'Ingen callsign-par fundet der er radiomæssigt for tæt på hinanden (samme suffix, suffix som ender på andet suffix, eller kun ét ciffer forskelligt).',
@@ -433,6 +490,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
       tomorrowResultEl.append(
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd} — ${pairs.length} mulige forvekslinger` }),
         tomorrowDataBlock,
+        ...(exclusionNote ? [exclusionNote] : []),
         el('p', {
           class: 'table-cap',
           text: 'Par der kan forveksles i radio: samme suffix, suffix som del af længere nummer (fx 441 i 4441), eller kun ét ciffer forskelligt på samme længde. Fortløbende flynumre, samme registrering og ikke-overlappende tidsvinduer filtreres fra.',
