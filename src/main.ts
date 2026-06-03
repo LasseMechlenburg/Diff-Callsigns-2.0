@@ -247,7 +247,25 @@ function relevantConcurrentSuffixes(entries: CallsignScheduleEntry[]): string[] 
 function buildDataTable(
   dayFlights: OcdcFlightRow[],
   resolvedCallsigns: ResolvedCallsign[],
+  opts: { labelText: string; open: boolean },
 ): HTMLDetailsElement {
+  function sourceLabel(source: ResolvedCallsign['source']): string {
+    switch (source) {
+      case 'ocdc-search':
+        return 'OCDC search'
+      case 'navblue-flightplan':
+        return 'NAVBLUE Flightplan'
+      case 'ocdc-flightkeys':
+        return 'OCDC FlightKeys'
+      case 'ocdc-live-eta':
+        return 'OCDC live-eta'
+      case 'pdf-fallback':
+        return 'PDF fallback'
+      default:
+        return '—'
+    }
+  }
+
   const rows = dayFlights
     .map((f, i) => {
       const fn = f.flightNumber.trim().toUpperCase()
@@ -261,7 +279,7 @@ function buildDataTable(
           : liveRaw
       }
       else display = '—'
-      return { fn, display }
+      return { fn, display, source: sourceLabel(row?.source ?? null) }
     })
     .sort((a, b) => a.fn.localeCompare(b.fn, 'da'))
 
@@ -271,6 +289,7 @@ function buildDataTable(
       el('tr', {}, [
         el('td', {}, [r.fn]),
         el('td', { class: 'mono' }, [r.display || '—']),
+        el('td', {}, [r.source]),
       ]),
     )
   }
@@ -280,13 +299,14 @@ function buildDataTable(
       el('tr', {}, [
         el('th', { text: 'Flynummer (IATA)' }),
         el('th', { text: 'Callsign' }),
+        el('th', { text: 'Kilde' }),
       ]),
     ]),
     tbody,
   ])
 
-  const det = el('details', { class: 'data-block' }) as HTMLDetailsElement
-  const sum = el('summary', { text: `Grunddata: ${rows.length} fly med STD på valgte dag (sorteret på flynummer)` })
+  const det = el('details', { class: 'data-block', open: opts.open }) as HTMLDetailsElement
+  const sum = el('summary', { text: `Grunddata: ${rows.length} fly med STD på ${opts.labelText} (sorteret på flynummer)` })
   const cap = el('p', {
     class: 'table-cap',
     text: 'Callsign: flyoversigt (søgning) → FlightKeys-liste (`/flights/callsigns`) → live-ETA → PDF-fallback. Hvis ingen kilde har callsign, vises den som tom (—).',
@@ -318,7 +338,7 @@ async function run(): Promise<void> {
     const clashSuffixes = relevantConcurrentSuffixes(entries)
     const suggestions = buildTwoSuggestions(selected, usedNumbers, clashSuffixes)
 
-    const dataBlock = buildDataTable(dayFlights, signs)
+    const dataBlock = buildDataTable(dayFlights, signs, { labelText: 'valgte dag', open: true })
 
     if (suggestions.length === 0) {
       const err =
@@ -372,6 +392,10 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
   try {
     const { dayFlights, signs } = await fetchResolvedCallsignsForCopenhagenDay(tomorrowYmd)
     const entries = buildCallsignEntries(dayFlights, signs)
+    const tomorrowDataBlock = buildDataTable(dayFlights, signs, {
+      labelText: `morgendag ${tomorrowYmd}`,
+      open: false,
+    })
 
     const pairs = findRiskyCallsignPairs(entries)
     const allSuffixes = relevantConcurrentSuffixes(entries)
@@ -380,6 +404,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
     if (pairs.length === 0) {
       tomorrowResultEl.append(
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd}` }),
+        tomorrowDataBlock,
         el('p', {
           class: 'tomorrow-ok',
           text: 'Ingen callsign-par fundet der er radiomæssigt for tæt på hinanden (samme suffix, suffix som ender på andet suffix, eller kun ét ciffer forskelligt).',
@@ -407,6 +432,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
       }
       tomorrowResultEl.append(
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd} — ${pairs.length} mulige forvekslinger` }),
+        tomorrowDataBlock,
         el('p', {
           class: 'table-cap',
           text: 'Par der kan forveksles i radio: samme suffix, suffix som del af længere nummer (fx 441 i 4441), eller kun ét ciffer forskelligt på samme længde. Fortløbende flynumre, samme registrering og ikke-overlappende tidsvinduer filtreres fra.',
