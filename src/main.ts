@@ -11,7 +11,7 @@ import {
   suggestSafeThreeDigitVkgSuffixes,
   type CallsignScheduleEntry,
 } from './lib/callsignSimilarity.ts'
-import { fetchResolvedCallsignsForCopenhagenDay } from './lib/scheduleCallsigns.ts'
+import { fetchResolvedCallsignsForCopenhagenDay, type ResolvedCallsign } from './lib/scheduleCallsigns.ts'
 import type { OcdcFlightRow } from './api/ocdc.ts'
 
 const RAIDO_NOTE =
@@ -201,11 +201,11 @@ function canBeSimultaneous(a: CallsignScheduleEntry, b: CallsignScheduleEntry): 
   return true
 }
 
-function buildCallsignEntries(dayFlights: OcdcFlightRow[], signs: (string | null)[]): CallsignScheduleEntry[] {
+function buildCallsignEntries(dayFlights: OcdcFlightRow[], signs: ResolvedCallsign[]): CallsignScheduleEntry[] {
   const entries: CallsignScheduleEntry[] = []
   for (let i = 0; i < dayFlights.length; i++) {
     const f = dayFlights[i]!
-    const raw = signs[i]?.trim() || ''
+    const raw = signs[i]?.callsign?.trim() || ''
     const cs = raw
     if (!cs) continue
     const suf = parseVkgDigitSuffix(cs)
@@ -246,14 +246,20 @@ function relevantConcurrentSuffixes(entries: CallsignScheduleEntry[]): string[] 
 
 function buildDataTable(
   dayFlights: OcdcFlightRow[],
-  rawCallsigns: (string | null)[],
+  resolvedCallsigns: ResolvedCallsign[],
 ): HTMLDetailsElement {
   const rows = dayFlights
     .map((f, i) => {
       const fn = f.flightNumber.trim().toUpperCase()
-      const liveRaw = rawCallsigns[i]?.trim() || ''
+      const row = resolvedCallsigns[i]
+      const liveRaw = row?.callsign?.trim() || ''
+      const isPdfFallback = row?.source === 'pdf-fallback'
       let display: string
-      if (liveRaw) display = liveRaw
+      if (liveRaw) {
+        display = isPdfFallback
+          ? `${liveRaw} (Fallback CHECK THIS CALLSIGN MANUALLY)`
+          : liveRaw
+      }
       else display = '—'
       return { fn, display }
     })
