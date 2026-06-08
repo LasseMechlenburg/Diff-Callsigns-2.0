@@ -19,7 +19,7 @@ const RAIDO_NOTE =
 
 const STATUS_LOADING = 'Henter data for valgte dag'
 const STATUS_TOMORROW = 'Henter morgendagens data…'
-const EXCLUDED_SUGGESTION_STATIONS = new Set(['GZP', 'ADB', 'AYT', 'HRG', 'SID', 'KBV', 'HKT'])
+const EXCLUDED_SUGGESTION_STATIONS = new Set(['GZP', 'ADB', 'AYT', 'HRG', 'SID', 'KBV', 'HKT', 'LCA'])
 
 function todayYmd(): string {
   return new Date().toISOString().slice(0, 10)
@@ -139,7 +139,14 @@ function buildStationExclusionNote(excludedCount: number): HTMLParagraphElement 
   if (excludedCount <= 0) return null
   return el('p', {
     class: 'table-cap',
-    text: `Note: ${excludedCount} fly til/fra GZP, ADB, AYT, HRG, SID, KBV eller HKT er udeladt i forslagene pga permits.`,
+    text: `Note: ${excludedCount} fly til/fra GZP, ADB, AYT, HRG, SID, KBV, HKT eller LCA er udeladt i forslagene pga permits.`,
+  })
+}
+
+function buildTimingExclusionNote(): HTMLParagraphElement {
+  return el('p', {
+    class: 'table-cap',
+    text: 'Note: Fly hvor planlagt STD eller STA afviger med mere end 60 minutter er udeladt i forvekslingsvurderingen.',
   })
 }
 
@@ -242,6 +249,8 @@ function buildCallsignEntries(dayFlights: OcdcFlightRow[], signs: ResolvedCallsi
       registration: resolveRegistration(f),
       windowStartMs: window?.startMs ?? null,
       windowEndMs: window?.endMs ?? null,
+      scheduledStdMs: toEpochMs(f.STD),
+      scheduledStaMs: toEpochMs((f as OcdcFlightRow & { STA?: string | null }).STA),
     })
   }
   return entries
@@ -452,6 +461,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
       open: false,
     })
     const exclusionNote = buildStationExclusionNote(excludedForSuggestions)
+    const timingNote = buildTimingExclusionNote()
 
     const pairs = findRiskyCallsignPairs(suggestionEntries)
     const allSuffixes = relevantConcurrentSuffixes(suggestionEntries)
@@ -462,6 +472,7 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd}` }),
         tomorrowDataBlock,
         ...(exclusionNote ? [exclusionNote] : []),
+        timingNote,
         el('p', {
           class: 'tomorrow-ok',
           text: 'Ingen callsign-par fundet der er radiomæssigt for tæt på hinanden (samme suffix, suffix som ender på andet suffix, eller kun ét ciffer forskelligt).',
@@ -491,9 +502,10 @@ async function checkTomorrowCallsignSimilarity(): Promise<void> {
         el('h2', { class: 'subh', text: `Morgendag ${tomorrowYmd} — ${pairs.length} mulige forvekslinger` }),
         tomorrowDataBlock,
         ...(exclusionNote ? [exclusionNote] : []),
+        timingNote,
         el('p', {
           class: 'table-cap',
-          text: 'Par der kan forveksles i radio: samme suffix, suffix som del af længere nummer (fx 441 i 4441), eller kun ét ciffer forskelligt på samme længde. Fortløbende flynumre, samme registrering og ikke-overlappende tidsvinduer filtreres fra.',
+          text: 'Par der kan forveksles i radio: samme suffix, suffix som del af længere nummer (fx 441 i 4441), eller kun ét ciffer forskelligt på samme længde. Fortløbende flynumre, samme registrering, ikke-overlappende tidsvinduer og >60 min forskel i STD/STA filtreres fra.',
         }),
         ul,
         el('h3', { class: 'subh-sm', text: 'Forslag: 3-cifrede VKG der ikke ligger for tæt på morgendagens suffixe' }),

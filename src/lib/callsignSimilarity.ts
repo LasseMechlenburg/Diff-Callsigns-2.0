@@ -57,6 +57,8 @@ export type CallsignScheduleEntry = {
   registration?: string | null
   windowStartMs?: number | null
   windowEndMs?: number | null
+  scheduledStdMs?: number | null
+  scheduledStaMs?: number | null
 }
 
 export type RiskyCallsignPair = {
@@ -114,8 +116,25 @@ function windowsOverlap(
   return aStart <= bEnd && bStart <= aEnd
 }
 
+function exceedsScheduledDiffLimit(
+  a: CallsignScheduleEntry,
+  b: CallsignScheduleEntry,
+  maxDiffMs: number,
+): boolean {
+  if (Number.isFinite(a.scheduledStdMs) && Number.isFinite(b.scheduledStdMs)) {
+    const stdDiff = Math.abs((a.scheduledStdMs as number) - (b.scheduledStdMs as number))
+    if (stdDiff > maxDiffMs) return true
+  }
+  if (Number.isFinite(a.scheduledStaMs) && Number.isFinite(b.scheduledStaMs)) {
+    const staDiff = Math.abs((a.scheduledStaMs as number) - (b.scheduledStaMs as number))
+    if (staDiff > maxDiffMs) return true
+  }
+  return false
+}
+
 export function findRiskyCallsignPairs(entries: CallsignScheduleEntry[]): RiskyCallsignPair[] {
   const out: RiskyCallsignPair[] = []
+  const maxStdStaDiffMs = 60 * 60 * 1000
   for (let i = 0; i < entries.length; i++) {
     for (let j = i + 1; j < entries.length; j++) {
       const a = entries[i]!
@@ -124,6 +143,8 @@ export function findRiskyCallsignPairs(entries: CallsignScheduleEntry[]): RiskyC
       if (areConsecutiveFlightNumbers(a.flightNumber, b.flightNumber)) continue
       // Flights on the same aircraft registration are not airborne simultaneously.
       if (isSameRegistration(a.registration, b.registration)) continue
+      // Skip pairs where scheduled STD or STA are more than 60 minutes apart.
+      if (exceedsScheduledDiffLimit(a, b, maxStdStaDiffMs)) continue
       // If we know both flight windows and they do not overlap, skip.
       if (
         hasKnownWindow(a) &&
